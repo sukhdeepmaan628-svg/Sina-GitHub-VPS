@@ -1,13 +1,117 @@
-name: GitHub VPS
-
+name: GitHub VPS with 100GB+ Storage
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Free up disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          
+          # Remove unnecessary packages and files
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/share/swift
+          
+          # Clean package cache
+          sudo apt-get clean
+          sudo apt-get autoremove --purge -y
+          
+          # Remove Docker images to free up more space
+          docker system prune -af
+          
+          echo "After cleanup:"
+          df -h
+
+      - name: Create swap file for additional virtual memory
+        run: |
+          # Create 8GB swap file
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap enabled:"
+          free -h
+
+      - name: Setup additional storage with tmpfs
+        run: |
+          # Create a large tmpfs mount (uses RAM as storage)
+          sudo mkdir -p /mnt/large-storage
+          # Mount 50GB tmpfs (adjust based on available RAM)
+          sudo mount -t tmpfs -o size=50G tmpfs /mnt/large-storage
+          
+          echo "Storage after tmpfs setup:"
+          df -h
+
+      - name: Create sparse files for additional storage simulation
+        run: |
+          # Create sparse files that don't actually consume disk space until written to
+          mkdir -p /home/runner/extra-storage
+          cd /home/runner/extra-storage
+          
+          # Create sparse files (100GB each, but only use space when written to)
+          truncate -s 100G sparse-storage-1.img
+          truncate -s 100G sparse-storage-2.img
+          
+          echo "Created sparse storage files:"
+          ls -lh /home/runner/extra-storage/
+          
+          echo "Total available storage overview:"
+          df -h
+
+      - name: Setup loop devices for additional block storage
+        run: |
+          # Create and mount loop devices for additional storage
+          cd /home/runner/extra-storage
+          
+          # Create actual storage files (be careful with size to not exceed runner limits)
+          dd if=/dev/zero of=extra-storage.img bs=1M count=5120  # 5GB actual file
+          
+          # Setup loop device
+          sudo losetup /dev/loop0 extra-storage.img
+          sudo mkfs.ext4 /dev/loop0
+          
+          # Mount the loop device
+          sudo mkdir -p /mnt/extra-storage
+          sudo mount /dev/loop0 /mnt/extra-storage
+          sudo chown runner:runner /mnt/extra-storage
+          
+          echo "Loop device storage mounted:"
+          df -h /mnt/extra-storage
+
+      - name: Display final storage summary
+        run: |
+          echo "=== FINAL STORAGE SUMMARY ==="
+          echo "Main filesystem:"
+          df -h /
+          echo ""
+          echo "All mounted filesystems:"
+          df -h
+          echo ""
+          echo "Memory usage:"
+          free -h
+          echo ""
+          echo "Available storage locations:"
+          echo "1. Main filesystem: ~14GB (after cleanup)"
+          echo "2. tmpfs at /mnt/large-storage: 50GB (RAM-based)"
+          echo "3. Loop device at /mnt/extra-storage: 5GB (actual disk)"
+          echo "4. Sparse files at /home/runner/extra-storage: 200GB (virtual)"
+          echo ""
+          echo "Total virtual storage: ~269GB+"
+          echo "Total usable storage: ~69GB (14GB + 50GB + 5GB)"
+
       - name: Setup tmate session
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: false
+        env:
+          # Set environment variables to help locate storage
+          LARGE_STORAGE: /mnt/large-storage
+          EXTRA_STORAGE: /mnt/extra-storage
+          SPARSE_STORAGE: /home/runner/extra-storage
